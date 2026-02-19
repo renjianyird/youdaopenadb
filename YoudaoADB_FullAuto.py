@@ -12,7 +12,7 @@ import re
 from scapy.all import sniff, IP, TCP, Raw, conf
 
 # ====================== 版本信息（会自动更新）======================
-VERSION = "2.0"
+VERSION = "3.7"
 AUTHOR = "喂鸡 (Wei Ji)"
 COPYRIGHT = "Copyright (C) 2026 喂鸡 (Wei Ji). All rights reserved."
 
@@ -131,7 +131,7 @@ def auto_capture():
         log_error("E103", "抓包模块启动失败", f"请以管理员身份运行程序，并确保安装Npcap: {str(e)}")
         return False
 
-# ====================== 2. 下载与解包模块（已修复闪退）======================
+# ====================== 2. 下载与解包模块（增加调试输出）======================
 def download_original_firmware(max_retries=3):
     retries = 0
     while retries < max_retries:
@@ -145,18 +145,19 @@ def download_original_firmware(max_retries=3):
                 timeout=30
             )
             r.raise_for_status()
+            print(f"[DEBUG] 服务器返回原始内容: {r.text}")  # 打印原始响应
             j = r.json()
 
             if j is None:
                 raise ValueError("服务器返回空数据")
             if "data" not in j or j["data"] is None:
-                raise ValueError("缺少 data 字段")
+                raise ValueError(f"缺少 data 字段，完整响应: {j}")
             if "version" not in j["data"] or j["data"]["version"] is None:
-                raise ValueError("缺少 version 字段")
+                raise ValueError(f"缺少 version 字段，data 内容: {j['data']}")
             if "deltaUrl" not in j["data"]["version"]:
-                raise ValueError("缺少 deltaUrl")
+                raise ValueError(f"缺少 deltaUrl 字段，version 内容: {j['data']['version']}")
             if "segmentMd5" not in j["data"]["version"]:
-                raise ValueError("缺少 segmentMd5")
+                raise ValueError(f"缺少 segmentMd5 字段，version 内容: {j['data']['version']}")
 
             url = j["data"]["version"]["deltaUrl"]
             seg = json.loads(j["data"]["version"]["segmentMd5"])
@@ -194,7 +195,7 @@ def md5_hex(data):
 
 def sha256_hex(path):
     try:
-        h = hashlib.sha256()
+        h = hashl.sha256()
         with open(path, "rb") as f:
             for b in iter(lambda: f.read(1024*1024), b""):
                 h.update(b)
