@@ -11,7 +11,12 @@ import time
 import requests
 from scapy.all import sniff, IP, TCP, Raw
 
-CAPTURED = {
+# ==============================
+# 完全按照你给的教程流程编写
+# 无任何自创逻辑
+# ==============================
+
+CAPTURE = {
     "host": "",
     "deltaUrl": "",
     "segmentMd5": [],
@@ -28,140 +33,166 @@ def get_local_ip():
     except:
         return "127.0.0.1"
 
-# ------------------------------------------------------------------------------
-# 【终极·不玩任何花样·抓包必中版】
-# 不过滤、不判断、不强转、抓到就停
-# ------------------------------------------------------------------------------
+# ==============================
+# 步骤1：抓包 checkVersion 响应
+# ==============================
 def packet_callback(pkt):
-    try:
-        if IP in pkt and TCP in pkt and Raw in pkt:
-            raw = pkt[Raw].load
-            data = raw.decode('utf-8', 'ignore')
+    if IP in pkt and TCP in pkt and Raw in pkt:
+        try:
+            data = pkt[Raw].load.decode("utf-8", "ignore")
             
+            # 取HOST
             if "checkVersion" in data:
-                match = re.search(r"Host:\s*([^\r\n]+)", data)
-                if match:
-                    CAPTURED["host"] = match.group(1)
+                res = re.findall(r"Host:\s*(.+)", data)
+                if res:
+                    CAPTURE["host"] = res[0].strip()
 
-            if "deltaUrl" in data and "status" in data:
-                jmatch = re.search(r"\{.*\}", data, re.DOTALL)
-                if jmatch:
-                    j = json.loads(jmatch.group(0))
-                    ver = j["data"]["version"]
-                    CAPTURED["deltaUrl"] = ver.get("deltaUrl")
-                    CAPTURED["segmentMd5"] = ver.get("segmentMd5", [])
-                    CAPTURED["endPos"] = ver.get("endPos", [])
-                    print("[INFO] 抓包成功！")
+            # 取更新JSON
+            if "status" in data and "deltaUrl" in data:
+                js = re.search(r"(\{.*\})", data, re.DOTALL)
+                if js:
+                    obj = json.loads(js.group(1))
+                    ver = obj["data"]["version"]
+                    CAPTURE["deltaUrl"] = ver["deltaUrl"]
+                    CAPTURE["segmentMd5"] = ver["segmentMd5"]
+                    CAPTURE["endPos"] = ver["endPos"]
                     return True
-    except:
-        pass
+        except:
+            pass
     return False
 
 def step1_capture():
-    print("\n=== 步骤1：抓包（请点检查更新）===")
+    print("=== 步骤1：抓包检查更新 ===")
+    print("请：词典笔连热点 → 设置 → 检查更新")
     try:
-        sniff(iface=None, prn=None, stop_filter=packet_callback, store=0, timeout=120)
+        sniff(stop_filter=packet_callback, store=0, timeout=120)
     except Exception as e:
-        print(f"错误：{e}")
+        print("抓包失败，请管理员运行并安装Npcap")
         return False
-
-    if not CAPTURED["deltaUrl"]:
-        print("抓包失败")
+    if not CAPTURE["deltaUrl"]:
+        print("未获取到更新包")
         return False
-    print("成功获取更新包地址")
+    print("✅ 抓包成功")
     return True
 
-# ------------------------------------------------------------------------------
-# 步骤2：下载
-# ------------------------------------------------------------------------------
+# ==============================
+# 步骤2：下载官方update.bin
+# ==============================
 def step2_download():
-    print("\n=== 步骤2：下载固件 ===")
-    r = requests.get(CAPTURED["deltaUrl"], stream=True, timeout=200)
+    print("=== 步骤2：下载更新包 ===")
+    url = CAPTURE["deltaUrl"]
+    r = requests.get(url, stream=True)
     with open("update.bin", "wb") as f:
-        for chunk in r.iter_content(1024*1024):
-            f.write(chunk)
-    print("下载完成")
+        for c in r.iter_content(1024*1024):
+            f.write(c)
+    print("✅ 下载完成：update.bin")
     return "update.bin"
 
-# ------------------------------------------------------------------------------
-# 步骤3：提取MD5
-# ------------------------------------------------------------------------------
-def step3_extract_md5(fn):
-    print("\n=== 步骤3：提取MD5 ===")
-    with open(fn, "rb") as f:
-        d = f.read()
-    matches = re.findall(rb"[0-9a-fA-F]{32}", d)
-    old = matches[0].decode().lower()
-    print("OLD MD5:", old)
+# ==============================
+# 步骤3：提取原始MD5
+# ==============================
+def step3_extract_md5(path):
+    print("=== 步骤3：提取原始MD5 ===")
+    with open(path, "rb") as f:
+        data = f.read()
+    match = re.findall(rb"[0-9a-fA-F]{32}", data)
+    old = match[0].decode().lower()
+    print("原始MD5:", old)
     return old
 
-# ------------------------------------------------------------------------------
-# 步骤4：修改固件
-# ------------------------------------------------------------------------------
-def step4_patch(fn, old_md5, pwd):
-    print("\n=== 步骤4：修改固件 ===")
+# ==============================
+# 步骤4：修改密码MD5
+# ==============================
+def step4_patch(path, old_md5, pwd):
+    print("=== 步骤4：修改固件 ===")
     new_md5 = hashlib.md5((pwd + "\n").encode()).hexdigest()
-    with open(fn, "rb") as f:
+    with open(path, "rb") as f:
         buf = f.read()
     buf = buf.replace(bytes.fromhex(old_md5), bytes.fromhex(new_md5))
     with open("patched.bin", "wb") as f:
         f.write(buf)
-    sha = hashlib.sha256(buf).hexdigest()
-    print("修改完成")
-    return "patched.bin", sha
+    sha256 = hashlib.sha256(buf).hexdigest()
+    print("✅ 已生成：patched.bin")
+    return "patched.bin", sha256
 
-# ------------------------------------------------------------------------------
-# 步骤5：服务器（完全按教程字段）
-# ------------------------------------------------------------------------------
-def step5_server(ip, fw_path, sha):
-    def file_srv():
+# ==============================
+# 步骤5：本地劫持服务器
+# 完全按教程字段返回
+# ==============================
+def step5_start_server(local_ip, fw_path, sha256):
+    print("=== 步骤5：启动本地服务器 ===")
+
+    def file_server():
         os.chdir(os.path.dirname(os.path.abspath(fw_path)))
-        with socketserver.ThreadingTCPServer(("0.0.0.0", 8080), http.server.SimpleHTTPRequestHandler) as s:
-            s.serve_forever()
-    def ota_srv():
-        class H(http.server.BaseHTTPRequestHandler):
+        socketserver.TCPServer(("0.0.0.0", 8080), http.server.SimpleHTTPRequestHandler).serve_forever()
+
+    def ota_server():
+        class OTAHandler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 self.send_response(200)
-                self.send_header("Content-Type","application/json; charset=utf-8")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
-                url = f"http://{ip}:8080/{os.path.basename(fw_path)}"
-                res = {
+                url = f"http://{local_ip}:8080/{os.path.basename(fw_path)}"
+                ret = {
                     "status": 1000,
                     "msg": "success",
                     "data": {
                         "version": {
                             "deltaUrl": url,
                             "fullUrl": url,
-                            "segmentMd5": CAPTURED["segmentMd5"],
-                            "endPos": CAPTURED["endPos"],
-                            "sha256sum": sha,
+                            "segmentMd5": CAPTURE["segmentMd5"],
+                            "endPos": CAPTURE["endPos"],
+                            "sha256sum": sha256,
                             "force": 1
                         }
                     }
                 }
-                self.wfile.write(json.dumps(res).encode())
-            def log_message(self, *args): pass
-        with socketserver.ThreadingTCPServer(("0.0.0.0",80), H) as s:
-            s.serve_forever()
-    threading.Thread(target=file_srv, daemon=True).start()
-    threading.Thread(target=ota_srv, daemon=True).start()
-    print("\n=== 服务器已启动 ===")
-    print(f"{ip}    {CAPTURED['host']}")
+                self.wfile.write(json.dumps(ret).encode())
+            def log_message(self, *args):
+                pass
+        socketserver.TCPServer(("0.0.0.0", 80), OTAHandler).serve_forever()
 
-# ------------------------------------------------------------------------------
-# 主流程
-# ------------------------------------------------------------------------------
+    threading.Thread(target=file_server, daemon=True).start()
+    threading.Thread(target=ota_server, daemon=True).start()
+
+    print("✅ 服务已启动")
+    print("设备HOSTS：")
+    print(f"{local_ip}    {CAPTURE['host']}")
+
+# ==============================
+# 主流程（严格按教程顺序）
+# 1.抓包 2.下载 3.提取MD5 4.修改 5.劫持
+# ==============================
 def main():
-    print("=== 最终稳定版 ===")
-    lip = get_local_ip()
-    print("本机IP:", lip)
-    if not step1_capture(): return
-    fw = step2_download()
-    old = step3_extract_md5(fw)
-    pwd = input("输入密码:")
-    nfw, sha = step4_patch(fw, old, pwd)
-    step5_server(lip, nfw, sha)
-    while 1: time.sleep(1)
+    print("==================================")
+    print("      按你教程完整重写版")
+    print("==================================")
+    ip = get_local_ip()
+    print("本机IP:", ip)
+
+    if not step1_capture():
+        input("按回车退出")
+        return
+
+    bin_file = step2_download()
+    old_md5 = step3_extract_md5(bin_file)
+
+    pwd = input("\n设置ADB密码：").strip()
+    if not pwd:
+        print("密码不能为空")
+        return
+
+    new_bin, sha = step4_patch(bin_file, old_md5, pwd)
+    step5_start_server(ip, new_bin, sha)
+
+    while True:
+        time.sleep(1)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception as e:
+        print("错误:", e)
+        input("退出...")
