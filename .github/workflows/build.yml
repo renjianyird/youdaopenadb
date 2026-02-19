@@ -30,7 +30,8 @@ jobs:
       - name: 自动把版本号写入代码
         shell: pwsh
         run: |
-          (Get-Content YoudaoADB_Full1Auto.py) -replace 'VERSION = ".*?"','VERSION = "${{ steps.calc_ver.outputs.build_version }}"' | Set-Content YoudaoADB_Full1Auto.py
+          $versionLine = "VERSION = `"${{ steps.calc_ver.outputs.build_version }}`""
+          (Get-Content YoudaoADB_Full1Auto.py) -replace '^VERSION = ".*?"', $versionLine | Set-Content YoudaoADB_Full1Auto.py
 
       - name: 安装依赖
         run: |
