@@ -12,7 +12,7 @@ import re
 from scapy.all import sniff, IP, TCP, Raw, conf
 
 # ====================== 版本信息 ======================
-VERSION = "5.0"
+VERSION = "5.1"
 AUTHOR = "喂鸡 (Wei Ji)"
 COPYRIGHT = "Copyright (C) 2026 喂鸡 (Wei Ji). All rights reserved."
 
@@ -92,9 +92,12 @@ def packet_callback(packet):
 
                 # 伪造为低版本号，让服务器下发固件
                 if "currentVersion" in post_data:
+                    old_ver = CAPTURED_DATA["post_data"]["currentVersion"]
                     CAPTURED_DATA["post_data"]["currentVersion"] = "4.88"
+                    print(f"[+] 版本号已从 {old_ver} 改为 4.88，强制获取全量固件")
                 if "deltaVersion" in post_data:
                     del CAPTURED_DATA["post_data"]["deltaVersion"]
+                    print(f"[+] 已删除增量更新标识，强制获取全量包")
 
                 CAPTURED_DATA["timestamp"] = post_data.get("timestamp", "")
                 CAPTURED_DATA["sign"] = post_data.get("sign", "")
@@ -112,15 +115,15 @@ def auto_capture():
         conf.iface = conf.iface
         sniff(prn=lambda x: None, stop_filter=packet_callback, store=0, timeout=60)
         if not CAPTURED_DATA["ota_url"]:
-            print("\n[!] 未抓到有效信息，请重试")
+            log_error("E102", "60秒内未捕获到有效OTA请求", "请确保词典笔已连接热点并触发检查更新")
             return False
         print("\n[+] 抓包完成，已准备好获取固件")
         return True
-    except Exception:
-        print("\n[!] 抓包失败，请用管理员权限运行")
+    except Exception as e:
+        log_error("E103", "抓包模块启动失败", f"请以管理员身份运行程序，并确保安装Npcap。异常: {str(e)}")
         return False
 
-# ====================== 固件下载 ======================
+# ====================== 固件下载（修复闪退） ======================
 def download_original_firmware():
     print("\n[*] 正在获取固件...")
     headers = {"Content-Type": "application/json;charset=UTF-8"}
@@ -132,14 +135,50 @@ def download_original_firmware():
             timeout=15
         )
         r.raise_for_status()
+        print(f"[DEBUG] 服务器返回原始内容: {r.text}")
         j = r.json()
 
+        # 第一次 2101：自动重试，确保版本号伪造生效
         if j.get("status") == 2101:
-            print("\n[!] 设备已是最新版本，正在尝试切换为低版本获取固件")
-            return None, None
+            print("\n[!] 设备已是最新版本，正在尝试切换为低版本获取固件...")
+            CAPTURED_DATA["post_data"]["currentVersion"] = "4.88"
+            if "deltaVersion" in CAPTURED_DATA["post_data"]:
+                del CAPTURED_DATA["post_data"]["deltaVersion"]
+            
+            # 重新发送请求
+            r = requests.post(
+                f"http://{CAPTURED_DATA['ota_url']}",
+                json=CAPTURED_DATA["post_data"],
+                headers=headers,
+                timeout=15
+            )
+            r.raise_for_status()
+            print(f"[DEBUG] 重试后服务器返回: {r.text}")
+            j = r.json()
 
+        # 第二次 2101：检查本地固件，避免闪退
+        if j.get("status") == 2101:
+            print("\n[!] 仍未获取到固件，正在检查本地文件...")
+            if os.path.exists("original.img"):
+                print("[+] 检测到本地已有 original.img，将直接使用本地固件继续流程。")
+                return "original.img", [0]
+            else:
+                log_error("E205", "词典笔已是最新版本，且未检测到本地固件文件", "请手动下载固件并重试")
+                return None, None
+
+        # 正常获取固件
+        if j is None or "data" not in j or j["data"] is None:
+            raise ValueError(f"服务器响应异常，无data字段: {j}")
+        if "version" not in j["data"] or j["data"]["version"] is None:
+            raise ValueError(f"服务器响应异常，无version字段: {j['data']}")
+        
         ver = j["data"]["version"]
         url = ver.get("deltaUrl") or ver.get("fullUrl")
+        if not url:
+            raise ValueError(f"未找到固件下载地址，version内容: {ver}")
+        if "segmentMd5" not in ver:
+            raise ValueError(f"缺少 segmentMd5 字段，version 内容: {ver}")
+        
         seg = json.loads(ver["segmentMd5"])
         endpos = [x["endpos"] for x in seg]
 
@@ -151,98 +190,147 @@ def download_original_firmware():
         print("[+] 固件下载完成")
         return "original.img", endpos
 
+    except requests.exceptions.Timeout:
+        log_error("E201", "请求超时", "服务器响应超时，请检查网络或词典笔是否支持当前操作")
+    except requests.exceptions.RequestException as e:
+        log_error("E201", "网络请求失败", str(e))
+    except (KeyError, json.JSONDecodeError, ValueError) as e:
+        log_error("E202", "解析固件地址失败", str(e))
     except Exception as e:
-        print(f"\n[!] 获取固件失败: {e}")
-        return None, None
+        log_error("E203", "下载失败", str(e))
+
+    # 失败后检查本地固件
+    if os.path.exists("original.img"):
+        print("[+] 检测到本地已有 original.img，将直接使用本地固件继续流程。")
+        return "original.img", [0]
+    return None, None
 
 # ====================== 固件修改 ======================
 def md5_hex(data):
     return hashlib.md5(data).hexdigest()
 
 def file_md5_hex(path):
-    h = hashlib.md5()
-    with open(path, "rb") as f:
-        for b in iter(lambda: f.read(1024*1024), b""):
-            h.update(b)
-    return h.hexdigest()
+    try:
+        h = hashlib.md5()
+        with open(path, "rb") as f:
+            for b in iter(lambda: f.read(1024*1024), b""):
+                h.update(b)
+        return h.hexdigest()
+    except Exception as e:
+        log_error("E302", "计算文件MD5失败", str(e))
+        return None
 
 def sha256_hex(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for b in iter(lambda: f.read(1024*1024), b""):
-            h.update(b)
-    return h.hexdigest()
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for b in iter(lambda: f.read(1024*1024), b""):
+                h.update(b)
+        return h.hexdigest()
+    except Exception as e:
+        log_error("E301", "计算SHA256失败", str(e))
+        return None
 
 def calc_new_pass_md5(password):
-    raw = (password + "\n").encode("utf-8")
-    return md5_hex(raw)
+    try:
+        raw = (password + "\n").encode("utf-8")
+        return md5_hex(raw)
+    except Exception as e:
+        log_error("E303", "计算新密码MD5失败", str(e))
+        return None
 
 def search_and_replace_md5_in_img(img_path, old_md5, new_md5):
-    with open(img_path, "rb") as f:
-        data = f.read()
-    old_bytes = bytes.fromhex(old_md5)
-    new_bytes = bytes.fromhex(new_md5)
-    new_data = data.replace(old_bytes, new_bytes)
-    with open("modified_firmware.img", "wb") as f:
-        f.write(new_data)
-    print("[+] 固件修改完成")
-    return "modified_firmware.img"
+    try:
+        with open(img_path, "rb") as f:
+            data = f.read()
+        old_bytes = bytes.fromhex(old_md5)
+        new_bytes = bytes.fromhex(new_md5)
+        if old_bytes not in data:
+            log_error("E304", "未在固件中找到原MD5，型号不匹配", "请确认固件与设备型号一致")
+            return None
+        new_data = data.replace(old_bytes, new_bytes)
+        with open("modified_firmware.img", "wb") as f:
+            f.write(new_data)
+        print("[+] 固件修改完成")
+        return "modified_firmware.img"
+    except Exception as e:
+        log_error("E305", "替换MD5失败", str(e))
+        return None
 
 def search_original_adb_md5(img_path):
-    with open(img_path, "rb") as f:
-        data = f.read()
-    match = re.search(rb"[0-9a-fA-F]{32}", data)
-    if match:
-        s = match.group(0).hex() if isinstance(match.group(0), bytes) else match.group(0)
-        print(f"[+] 已识别原始密码信息")
-        return s
-    return None
+    try:
+        with open(img_path, "rb") as f:
+            data = f.read()
+        match = re.search(rb"[0-9a-fA-F]{32}", data)
+        if match:
+            s = match.group(0).hex() if isinstance(match.group(0), bytes) else match.group(0)
+            print(f"[+] 已识别原始密码信息")
+            return s
+        log_error("E306", "无法自动提取MD5", "固件中未找到符合格式的MD5字符串")
+        return None
+    except Exception as e:
+        log_error("E307", "扫描MD5失败", str(e))
+        return None
 
 # ====================== 服务启动 ======================
 def start_file_server(local_ip, img_path):
-    os.chdir(os.path.dirname(os.path.abspath(img_path)))
-    port = 14514
-    socketserver.TCPServer.allow_reuse_address = True
-    server = socketserver.TCPServer(("", port), http.server.SimpleHTTPRequestHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        os.chdir(os.path.dirname(os.path.abspath(img_path)))
+        port = 14514
+        socketserver.TCPServer.allow_reuse_address = True
+        server = socketserver.TCPServer(("", port), http.server.SimpleHTTPRequestHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        print(f"[+] 文件服务已启动: http://{local_ip}:14514")
+        return True
+    except Exception as e:
+        log_error("E401", "启动文件服务器失败", f"端口14514可能被占用: {str(e)}")
+        return False
 
 def start_ota_server(local_ip, modified_img, endpos_list):
-    img_name = os.path.basename(modified_img)
-    url = f"http://{local_ip}:14514/{img_name}"
-    f_md5 = file_md5_hex(modified_img)
-    f_sha = sha256_hex(modified_img)
+    try:
+        img_name = os.path.basename(modified_img)
+        url = f"http://{local_ip}:14514/{img_name}"
+        f_md5 = file_md5_hex(modified_img)
+        f_sha = sha256_hex(modified_img)
+        if not f_md5 or not f_sha:
+            raise ValueError("无法计算固件校验值")
 
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_POST(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json;charset=utf-8")
-            self.end_headers()
-            seg = json.dumps([{
-                "num": i,
-                "startpos": 0 if i == 0 else endpos_list[i-1],
-                "endpos": endpos_list[i],
-                "md5": "0"*32
-            } for i in range(len(endpos_list))])
-            res = {
-                "status": 1000,
-                "msg": "success",
-                "data": {
-                    "releaseNotes": {"version":"99.99.99"},
-                    "version": {
-                        "deltaUrl": url,
-                        "bakUrl": url,
-                        "md5sum": f_md5,
-                        "sha": f_sha,
-                        "segmentMd5": seg,
-                        "versionName": "99.99.99"
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json;charset=utf-8")
+                self.end_headers()
+                seg = json.dumps([{
+                    "num": i,
+                    "startpos": 0 if i == 0 else endpos_list[i-1],
+                    "endpos": endpos_list[i],
+                    "md5": "0"*32
+                } for i in range(len(endpos_list))])
+                res = {
+                    "status": 1000,
+                    "msg": "success",
+                    "data": {
+                        "releaseNotes": {"version":"99.99.99"},
+                        "version": {
+                            "deltaUrl": url,
+                            "bakUrl": url,
+                            "md5sum": f_md5,
+                            "sha": f_sha,
+                            "segmentMd5": seg,
+                            "versionName": "99.99.99"
+                        }
                     }
                 }
-            }
-            self.wfile.write(json.dumps(res).encode())
+                self.wfile.write(json.dumps(res).encode())
+                print("\n[+] 词典笔已连接，等待更新...")
 
-    server = socketserver.TCPServer((local_ip, 80), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    print("[+] 升级服务已启动")
+        server = socketserver.TCPServer((local_ip, 80), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        print("[+] OTA劫持服务已启动（端口80）")
+        return True
+    except Exception as e:
+        log_error("E402", "启动OTA服务器失败", f"端口80可能被占用或权限不足: {str(e)}")
+        return False
 
 # ====================== 主流程 ======================
 def main():
@@ -257,7 +345,8 @@ def main():
 
     new_pass = input_step("设置你要的ADB密码")
     if not new_pass:
-        print("[!] 密码不能为空")
+        log_error("E002", "未设置ADB新密码", "密码不能为空")
+        save_error_log()
         os.system("pause")
         return
 
@@ -268,11 +357,33 @@ def main():
         return
 
     old_md5 = search_original_adb_md5(original_img)
-    new_md5 = calc_new_pass_md5(new_pass)
-    modified_img = search_and_replace_md5_in_img(original_img, old_md5, new_md5)
+    if not old_md5:
+        save_error_log()
+        os.system("pause")
+        return
 
-    start_file_server(local_ip, modified_img)
-    start_ota_server(local_ip, modified_img, endpos)
+    new_md5 = calc_new_pass_md5(new_pass)
+    if not new_md5:
+        save_error_log()
+        os.system("pause")
+        return
+    print(f"新密码MD5：{new_md5}")
+
+    modified_img = search_and_replace_md5_in_img(original_img, old_md5, new_md5)
+    if not modified_img:
+        save_error_log()
+        os.system("pause")
+        return
+
+    if not start_file_server(local_ip, modified_img):
+        save_error_log()
+        os.system("pause")
+        return
+
+    if not start_ota_server(local_ip, modified_img, endpos):
+        save_error_log()
+        os.system("pause")
+        return
 
     print("\n" + "="*50)
     print("[下一步操作]")
@@ -291,6 +402,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         sys.exit()
     except Exception as e:
-        log_error("CRASH", "程序异常", str(e))
+        log_error("E999", "程序致命错误", str(e))
         save_error_log()
         os.system("pause")
