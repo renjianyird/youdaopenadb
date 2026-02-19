@@ -1,4 +1,4 @@
-name: 编译有道词典笔ADB工具 V2.0
+name: 编译并发布 · 有道词典笔ADB全自动工具 V2.0
 
 on:
   workflow_dispatch:
@@ -10,14 +10,34 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install requests pyinstaller
-      - run: pyinstaller -F -c YoudaoADB_FullAuto.py
-      - uses: softprops/action-gh-release@v2
+          architecture: 'x64'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyinstaller
+
+      - name: 编译单文件 EXE
+        run: |
+          pyinstaller -F -c YoudaoADB_FullAuto.py
+
+      - name: 发布到 Release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v2.0
-          name: 有道词典笔ADB全自动工具 V2.0 - 作者：喂鸡 (Wei Ji)
+          name: 有道词典笔ADB全自动工具 V2.0
+          body: |
+            版本：V2.0
+            作者：喂鸡 (Wei Ji)
+            功能：全流程自动破解ADB，无需外部工具
+            版权所有 © 2026 喂鸡 (Wei Ji)
           files: dist/YoudaoADB_FullAuto.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
