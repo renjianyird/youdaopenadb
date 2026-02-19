@@ -11,7 +11,7 @@ import time
 import re
 from scapy.all import sniff, IP, TCP, Raw, conf
 
-# ====================== 版本信息 ======================
+# ====================== 版本信息（会自动更新）======================
 VERSION = "2.0"
 AUTHOR = "喂鸡 (Wei Ji)"
 COPYRIGHT = "Copyright (C) 2026 喂鸡 (Wei Ji). All rights reserved."
@@ -29,7 +29,6 @@ CAPTURED_DATA = {
 ERROR_LOG = []
 
 def log_error(error_code, message, details=""):
-    """记录错误到日志"""
     error_entry = {
         "code": error_code,
         "message": message,
@@ -42,7 +41,6 @@ def log_error(error_code, message, details=""):
         print(f"详细信息: {details}")
 
 def save_error_log():
-    """保存错误日志到文件"""
     if not ERROR_LOG:
         return
     log_file = "YoudaoADB_ErrorLog.txt"
@@ -75,7 +73,7 @@ def print_title():
 def get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
+        s.connect(("8.8.8.8", 8))
         ip = s.getsockname()[0]
         s.close()
         return ip
@@ -133,7 +131,7 @@ def auto_capture():
         log_error("E103", "抓包模块启动失败", f"请以管理员身份运行程序，并确保安装Npcap: {str(e)}")
         return False
 
-# ====================== 2. 下载与解包模块 ======================
+# ====================== 2. 下载与解包模块（已修复闪退）======================
 def download_original_firmware(max_retries=3):
     retries = 0
     while retries < max_retries:
@@ -148,11 +146,22 @@ def download_original_firmware(max_retries=3):
             )
             r.raise_for_status()
             j = r.json()
-            
+
+            if j is None:
+                raise ValueError("服务器返回空数据")
+            if "data" not in j or j["data"] is None:
+                raise ValueError("缺少 data 字段")
+            if "version" not in j["data"] or j["data"]["version"] is None:
+                raise ValueError("缺少 version 字段")
+            if "deltaUrl" not in j["data"]["version"]:
+                raise ValueError("缺少 deltaUrl")
+            if "segmentMd5" not in j["data"]["version"]:
+                raise ValueError("缺少 segmentMd5")
+
             url = j["data"]["version"]["deltaUrl"]
             seg = json.loads(j["data"]["version"]["segmentMd5"])
             endpos = [x["endpos"] for x in seg]
-            
+
             print(f"[+] 固件地址：{url}")
             with open("original.img", "wb") as f:
                 with requests.get(url, stream=True, timeout=60) as resp:
@@ -161,22 +170,22 @@ def download_original_firmware(max_retries=3):
                         f.write(chunk)
             print("[+] 官方固件下载完成")
             return "original.img", endpos
-            
+
         except requests.exceptions.RequestException as e:
             retries += 1
-            log_error("E201", f"网络请求失败 (尝试 {retries}/{max_retries})", str(e))
-        except (KeyError, json.JSONDecodeError) as e:
+            log_error("E201", f"网络请求失败 ({retries}/{max_retries})", str(e))
+        except (KeyError, json.JSONDecodeError, ValueError) as e:
             retries += 1
-            log_error("E202", f"解析固件地址失败 (尝试 {retries}/{max_retries})", f"服务器返回格式异常: {str(e)}")
+            log_error("E202", f"解析固件地址失败 ({retries}/{max_retries})", str(e))
         except Exception as e:
             retries += 1
-            log_error("E203", f"下载固件时发生未知错误 (尝试 {retries}/{max_retries})", str(e))
-        
+            log_error("E203", f"下载失败 ({retries}/{max_retries})", str(e))
+
         if retries < max_retries:
-            print(f"[!] 将在 5 秒后重试...")
+            print(f"[!] 5秒后重试...")
             time.sleep(5)
-    
-    log_error("E204", "连续多次获取固件地址失败", "请检查网络连接和OTA参数有效性")
+
+    log_error("E204", "多次获取固件地址失败，无法继续")
     return None, None
 
 # ====================== 3. 修改与校验模块 ======================
@@ -191,7 +200,7 @@ def sha256_hex(path):
                 h.update(b)
         return h.hexdigest()
     except Exception as e:
-        log_error("E301", f"计算文件SHA256失败: {path}", str(e))
+        log_error("E301", f"计算SHA256失败", str(e))
         return None
 
 def file_md5_hex(path):
@@ -202,7 +211,7 @@ def file_md5_hex(path):
                 h.update(b)
         return h.hexdigest()
     except Exception as e:
-        log_error("E302", f"计算文件MD5失败: {path}", str(e))
+        log_error("E302", f"计算MD5失败", str(e))
         return None
 
 def calc_new_pass_md5(password):
@@ -222,7 +231,7 @@ def search_and_replace_md5_in_img(img_path, old_md5_hex, new_md5_hex):
             data = f.read()
 
         if old_bytes not in data:
-            log_error("E304", "未在固件中找到原MD5", "可能型号不匹配或固件已损坏")
+            log_error("E304", "未在固件中找到原MD5，型号不匹配")
             return None
 
         new_data = data.replace(old_bytes, new_bytes)
@@ -234,7 +243,7 @@ def search_and_replace_md5_in_img(img_path, old_md5_hex, new_md5_hex):
         print(f"[+] MD5替换完成！新固件：{new_img}")
         return new_img
     except Exception as e:
-        log_error("E305", "替换固件中的MD5失败", str(e))
+        log_error("E305", "替换MD5失败", str(e))
         return None
 
 def search_original_adb_md5(img_path):
@@ -248,10 +257,10 @@ def search_original_adb_md5(img_path):
             s = match.group(0).decode().split()[0]
             print(f"[+] 找到原MD5：{s}")
             return s
-        log_error("E306", "无法自动提取MD5", "固件格式可能不支持")
+        log_error("E306", "无法自动提取MD5")
         return None
     except Exception as e:
-        log_error("E307", "扫描固件中的MD5失败", str(e))
+        log_error("E307", "扫描MD5失败", str(e))
         return None
 
 # ====================== 4. 服务器模块 ======================
@@ -265,7 +274,7 @@ def start_file_server(local_ip, img_path):
         print(f"[+] 文件服务启动：http://{local_ip}:14514")
         return True
     except Exception as e:
-        log_error("E401", "启动文件服务器失败", f"端口 {14514} 可能被占用: {str(e)}")
+        log_error("E401", "启动文件服务器失败，端口被占用？", str(e))
         return False
 
 def start_ota_server(local_ip, modified_img, endpos_list):
@@ -314,7 +323,7 @@ def start_ota_server(local_ip, modified_img, endpos_list):
         print("[+] OTA劫持服务启动（端口80）")
         return True
     except Exception as e:
-        log_error("E402", "启动OTA劫持服务器失败", f"端口 80 可能被占用或权限不足: {str(e)}")
+        log_error("E402", "启动OTA服务器失败", str(e))
         return False
 
 # ====================== 主程序 ======================
@@ -323,68 +332,60 @@ def main():
     local_ip = get_local_ip()
     print(f"本机IP：{local_ip}")
 
-    # 1. 自动抓包
     if not auto_capture():
-        print("\n[!] 抓包失败，程序无法继续。")
+        print("\n[!] 抓包失败")
         save_error_log()
         os.system("pause")
         return
 
-    # 2. 设置新密码
     new_pass = input_step("设置你要的ADB新密码")
     if not new_pass:
-        log_error("E002", "未设置ADB新密码", "密码不能为空")
+        log_error("E002", "未设置ADB新密码")
         save_error_log()
         os.system("pause")
         return
 
-    # 3. 下载官方固件
     original_img, endpos = download_original_firmware()
     if not original_img or not endpos:
-        print("\n[!] 下载固件失败，程序无法继续。")
+        print("\n[!] 下载固件失败")
         save_error_log()
         os.system("pause")
         return
 
-    # 4. 自动提取原MD5
     old_md5 = search_original_adb_md5(original_img)
     if not old_md5:
-        print("\n[!] 提取原MD5失败，程序无法继续。")
+        print("\n[!] 提取原MD5失败")
         save_error_log()
         os.system("pause")
         return
 
-    # 5. 计算新密码MD5（带换行）
     new_md5 = calc_new_pass_md5(new_pass)
     if not new_md5:
-        print("\n[!] 计算新密码MD5失败，程序无法继续。")
+        print("\n[!] 计算新密码MD5失败")
         save_error_log()
         os.system("pause")
         return
     print(f"新密码MD5：{new_md5}")
 
-    # 6. 替换MD5生成新固件
     modified_img = search_and_replace_md5_in_img(original_img, old_md5, new_md5)
     if not modified_img:
-        print("\n[!] 生成新固件失败，程序无法继续。")
+        print("\n[!] 生成新固件失败")
         save_error_log()
         os.system("pause")
         return
 
-    # 7. 启动双服务器
     if not start_file_server(local_ip, modified_img):
-        print("\n[!] 启动文件服务器失败，程序无法继续。")
+        print("\n[!] 启动文件服务器失败")
         save_error_log()
         os.system("pause")
         return
 
     if not start_ota_server(local_ip, modified_img, endpos):
-        print("\n[!] 启动OTA服务器失败，程序无法继续。")
+        print("\n[!] 启动OTA服务器失败")
         save_error_log()
         os.system("pause")
         return
 
-    # 8. 最终指引
     print("\n" + "="*70)
     print("[+] 全流程完成！现在只需：")
     print(f"1. 修改HOSTS：{local_ip} iotapi.abupdate.com")
@@ -399,12 +400,12 @@ def main():
 if __name__ == "__main__":
     try:
         if os.name == 'nt' and not sys.argv[0].endswith('exe'):
-            print("[!] 抓包功能需要管理员权限，请以管理员身份运行此脚本。")
+            print("[!] 抓包需要管理员权限，请以管理员身份运行。")
         main()
     except KeyboardInterrupt:
-        print("\n[*] 用户主动退出程序。")
+        print("\n[*] 用户退出")
     except Exception as e:
-        log_error("E999", "程序发生未捕获的致命错误", str(e))
+        log_error("E999", "程序致命错误", str(e))
         save_error_log()
-        print("\n[!] 程序异常退出，请查看错误日志。")
+        print("\n[!] 程序异常退出")
         os.system("pause")
