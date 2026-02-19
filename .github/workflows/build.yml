@@ -1,6 +1,10 @@
-name: 编译并发布 · 有道词典笔ADB全自动工具 V2.0
+name: 自动构建并发布 Release
 
+# 只要你 push 代码，就自动编译发版
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -10,34 +14,38 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: 设置 Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          architecture: 'x64'
+          python-version: "3.11"
 
       - name: 安装依赖
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install requests pyinstaller
 
-      - name: 编译单文件 EXE
+      - name: 编译 EXE
+        run: pyinstaller -F -c YoudaoADB_FullAuto.py
+
+      - name: 自动生成版本号 2.0 → 2.1 → 2.2…
+        id: version
+        shell: pwsh
         run: |
-          pyinstaller -F -c YoudaoADB_FullAuto.py
+          $base = 2.0
+          $build = $env:GITHUB_RUN_NUMBER
+          $ver = [math]::Round($base + $build/10, 1)
+          echo "build_version=$ver" >> $env:GITHUB_OUTPUT
 
       - name: 发布到 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0
-          name: 有道词典笔ADB全自动工具 V2.0
+          tag_name: v${{ steps.version.outputs.build_version }}
+          name: 有道词典笔ADB工具 v${{ steps.version.outputs.build_version }}
           body: |
-            版本：V2.0
-            作者：喂鸡 (Wei Ji)
-            功能：全流程自动破解ADB，无需外部工具
-            版权所有 © 2026 喂鸡 (Wei Ji)
+            ✅ 自动构建版本：v${{ steps.version.outputs.build_version }}
+            ✅ 作者：喂鸡 (Wei Ji)
+            ✅ 全流程一体化工具
+            © 2026 喂鸡 (Wei Ji) 版权所有
           files: dist/YoudaoADB_FullAuto.exe
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
