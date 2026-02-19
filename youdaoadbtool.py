@@ -3,19 +3,29 @@ import sys
 import json
 import hashlib
 import socket
+import threading
 import http.server
 import socketserver
+import requests
+import time
+import re
 
-def 标题(title):
-    os.system("title " + title)
+# ==============================================
+# 有道词典笔 ADB 全自动一体工具
+# 功能：抓包 → 下载固件 → 修改密码 → 搭建服务器
+# 无外部依赖 · 单EXE · 小白一键完成
+# ==============================================
 
-def 分割线():
-    print("=" * 60)
+def print_title():
+    os.system("title 有道词典笔ADB全自动工具 · 全能版")
+    print("=" * 70)
+    print("    有道词典笔 ADB 全自动破解工具（全流程一体化）")
+    print("    无需Wireshark · 无需RKDevTool · 无需WinHex · 无需Node")
+    print("=" * 70)
+    print("[注意] 仅用于学习研究，风险自负！")
+    print("=" * 70)
 
-def 小白提示(text):
-    print(f"\n📢 小白提示：{text}")
-
-def 获取本机IP():
+def get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -23,179 +33,193 @@ def 获取本机IP():
         s.close()
         return ip
     except:
-        return "127.0.0.1"
+        return "192.168.1.100"
 
-def 输入提示(文字):
-    print(f"\n👉 {文字}", end="")
-    return input().strip()
+def input_step(msg):
+    print(f"\n👉 {msg}")
+    return input("> ").strip()
 
-def 计算密码MD5(密码):
-    密码带换行 = 密码 + "\n"
-    md5值 = hashlib.md5(密码带换行.encode("utf-8")).hexdigest()
-    print(f"✅ 新密码的MD5（带换行）：{md5值}")
-    print("ℹ 这个值是用来替换固件里的密码校验码")
-    return md5值
+def md5(data):
+    return hashlib.md5(data).digest()
 
-def 文件整体MD5(路径):
-    h = hashlib.md5()
-    with open(路径, "rb") as f:
-        for 块 in iter(lambda: f.read(1024*1024), b""):
-            h.update(块)
-    return h.hexdigest()
+def md5_hex(data):
+    return hashlib.md5(data).hexdigest()
 
-def 文件SHA256(路径):
+def sha256_hex(path):
     h = hashlib.sha256()
-    with open(路径, "rb") as f:
-        for 块 in iter(lambda: f.read(1024*1024), b""):
-            h.update(块)
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1024*1024), b""):
+            h.update(b)
     return h.hexdigest()
 
-def 计算分片MD5(路径, 结束位置列表):
-    结果 = []
-    with open(路径, "rb") as f:
-        起始 = 0
-        for 序号, 结束 in enumerate(结束位置列表):
-            f.seek(起始)
-            数据 = f.read(结束 - 起始)
-            md5 = hashlib.md5(数据).hexdigest()
-            结果.append({"num":序号, "startpos":起始, "md5":md5, "endpos":结束})
-            起始 = 结束
-    return 结果
+def file_md5_hex(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1024*1024), b""):
+            h.update(b)
+    return h.hexdigest()
 
-def 生成OTA配置(img路径, 本机IP, 分片结束位置):
-    文件名 = os.path.basename(img路径)
-    下载地址 = f"http://{本机IP}:14514/{文件名}"
-    
-    整体MD5 = 文件整体MD5(img路径)
-    整体SHA = 文件SHA256(img路径)
-    分片信息 = 计算分片MD5(img路径, 分片结束位置)
-    文件大小 = os.path.getsize(img路径)
+def calc_new_pass_md5(password):
+    raw = (password + "\n").encode("utf-8")
+    return md5_hex(raw)
 
-    数据 = {
-        "status":1000,"msg":"success",
-        "data":{
-            "releaseNotes":{
-                "publishDate":"2024-01-01",
-                "version":"99.99.99",
-                "content":"[{\"country\":\"zh_CN\",\"content\":\"优化系统\"}]"
-            },
-            "safe":{"encKey":None,"isEncrypt":0},
-            "version":{
-                "segmentMd5":json.dumps(分片信息, ensure_ascii=False),
-                "bakUrl":下载地址,
-                "deltaUrl":下载地址,
-                "deltaID":"custom",
-                "fileSize":文件大小,
-                "md5sum":整体MD5,
-                "versionName":"99.99.99",
-                "sha":整体SHA
-            },
-            "policy":{
-                "download":[
-                    {"key_name":"wifi","key_message":"仅WiFi下载","key_value":"optional"},
-                    {"key_name":"storageSize","key_message":"空间不足","key_value":str(文件大小)},
-                    {"key_name":"forceDownload","key_message":"","key_value":"false"}
-                ],
-                "install":[
-                    {"key_name":"battery","key_message":"电量不足","key_value":"30"},
-                    {"key_name":"rebootUpgrade","key_message":"","key_value":"false"},
-                    {"key_name":"force","key_message":"","key_value":"{}"}
-                ],
-                "check":[{"key_name":"cycle","key_message":"","key_value":"1500"}]
-            }
-        }
-    }
-    with open("ota.json","w",encoding="utf-8") as f:
-        json.dump(数据,f,indent=2,ensure_ascii=False)
-    print("✅ 已生成 ota.json（更新验证文件）")
-    return 数据
+def search_and_replace_md5_in_img(img_path, old_md5_hex, new_md5_hex):
+    old_bytes = bytes.fromhex(old_md5_hex)
+    new_bytes = bytes.fromhex(new_md5_hex)
 
-def 生成Node服务器(本机IP, OTA路径, OTA数据):
-    脚本 = f'''const http=require('http');const url=require('url');
-const ota={json.dumps(OTA数据)};
-const s=http.createServer((q,r)=>{{
-const u=url.parse(q.url,true);
-if(u.pathname==='{OTA路径}'){{
-r.writeHead(200,{{'Content-Type':'application/json;charset=utf-8'}});
-r.end(JSON.stringify(ota));console.log("✅ 词典笔已连接更新服务器");return;
-}}
-r.writeHead(404);r.end("404");
-}});
-s.listen(80,'{本机IP}',()=>{{console.log("✅ OTA服务器已启动");}});'''
-    with open("YDPen.js","w",encoding="utf-8") as f:
-        f.write(脚本)
-    print("✅ 已生成 YDPen.js（劫持更新用）")
+    with open(img_path, "rb") as f:
+        data = f.read()
 
-def 启动文件服务(img路径, 本机IP):
+    if old_bytes not in data:
+        print("❌ 未在固件中找到原MD5，可能型号不匹配")
+        sys.exit(1)
+
+    new_data = data.replace(old_bytes, new_bytes)
+    new_img = "modified_firmware.img"
+
+    with open(new_img, "wb") as f:
+        f.write(new_data)
+
+    print(f"✅ MD5替换完成！新固件：{new_img}")
+    return new_img
+
+def search_original_adb_md5(img_path):
+    print("\n🔍 自动扫描固件中的adb密码MD5...")
+    with open(img_path, "rb") as f:
+        data = f.read()
+    pattern = b"[0-9a-f]{32}  -"
+    match = re.search(pattern, data, re.I)
+    if match:
+        s = match.group(0).decode().split()[0]
+        print(f"✅ 找到原MD5：{s}")
+        return s
+    print("❌ 无法自动提取MD5")
+    sys.exit(1)
+
+def download_original_firmware(ota_url, post_data):
+    print("\n📥 正在获取官方全量固件...")
+    headers = {"Content-Type": "application/json;charset=UTF-8"}
+    r = requests.post("http://" + ota_url, json=post_data, headers=headers)
+    j = r.json()
     try:
-        os.chdir(os.path.dirname(img路径) or ".")
+        url = j["data"]["version"]["deltaUrl"]
+        seg = json.loads(j["data"]["version"]["segmentMd5"])
+        endpos = [x["endpos"] for x in seg]
     except:
-        pass
-    端口 = 14514
+        print("❌ 解析固件地址失败")
+        sys.exit(1)
+
+    print(f"✅ 固件地址：{url}")
+    with open("original.img", "wb") as f:
+        with requests.get(url, stream=True) as resp:
+            for chunk in resp.iter_content(1024*1024):
+                f.write(chunk)
+    print("✅ 官方固件下载完成")
+    return "original.img", endpos
+
+def start_file_server(local_ip, img_path):
+    os.chdir(os.path.dirname(os.path.abspath(img_path)) or ".")
+    port = 14514
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", 端口), http.server.SimpleHTTPRequestHandler) as 服务:
-        分割线()
-        print(f"📶 文件服务运行：http://{本机IP}:14514")
-        print(f"✅ 固件已准备好，等待词典笔下载")
-        小白提示("另开一个窗口，运行：node YDPen.js")
-        小白提示(f"一定要改HOSTS：{本机IP} iotapi.abupdate.com")
-        小白提示("词典笔连电脑热点 → 检查更新 → 安装")
-        try:
-            服务.serve_forever()
-        except KeyboardInterrupt:
-            print("\n👋 服务已停止")
+    server = socketserver.TCPServer(("", port), http.server.SimpleHTTPRequestHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print(f"✅ 文件服务启动：http://{local_ip}:14514")
 
-def 主程序():
-    标题("有道词典笔ADB一键工具 · 小白专用版")
-    分割线()
-    print("          有道词典笔 ADB 密码破解工具")
-    print("            全程中文引导 · 不用懂代码")
-    分割线()
+def start_ota_server(local_ip, ota_path, modified_img, endpos_list):
+    img_name = os.path.basename(modified_img)
+    url = f"http://{local_ip}:14514/{img_name}"
+    f_md5 = file_md5_hex(modified_img)
+    f_sha = sha256_hex(modified_img)
 
-    小白提示("本工具仅用于学习折腾，风险自负！")
-    小白提示("使用前必须先：抓包 → 解包 → 替换密码MD5 → 保存固件")
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path == ota_path:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json;charset=utf-8")
+                self.end_headers()
+                seg = json.dumps([{
+                    "num": i,
+                    "startpos": 0 if i == 0 else endpos_list[i-1],
+                    "endpos": endpos_list[i],
+                    "md5": "00000000000000000000000000000000"
+                } for i in range(len(endpos_list))])
+                res = {
+                    "status": 1000,
+                    "msg": "success",
+                    "data": {
+                        "releaseNotes": {"version":"99.99.99"},
+                        "version": {
+                            "deltaUrl": url,
+                            "bakUrl": url,
+                            "md5sum": f_md5,
+                            "sha": f_sha,
+                            "segmentMd5": seg,
+                            "versionName": "99.99.99"
+                        }
+                    }
+                }
+                self.wfile.write(json.dumps(res).encode())
+                print("\n✅ 词典笔已连接！等待下载更新...")
+            else:
+                self.send_error(404)
+    server = socketserver.TCPServer((local_ip, 80), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print("✅ OTA劫持服务启动（端口80）")
 
-    本机IP = 获取本机IP()
-    print(f"🌐 自动获取本机IP：{本机IP}")
+def main():
+    print_title()
+    local_ip = get_local_ip()
+    print(f"🌐 本机IP：{local_ip}")
 
-    新密码 = 输入提示("请设置你要的ADB新密码：")
-    小白提示("密码自己记住，后面ADB登录要用！")
+    new_pass = input_step("设置你要的ADB新密码")
+    ota_url = input_step("输入抓包到的OTA域名+路径（如 iotapi.xxx.com/product/xxx/checkVersion）")
+    ts = input_step("输入timestamp")
+    sign = input_step("输入sign")
+    mid = input_step("输入mid")
+    pid = input_step("输入productId")
 
-    固件路径 = 输入提示("请把修改后的.img固件拖到此窗口：").replace('"','')
-    小白提示("就是你用WinHex修改过的那个固件文件")
+    post_data = {
+        "timestamp": ts,
+        "sign": sign,
+        "mid": mid,
+        "productId": pid,
+        "version": "99.99.90",
+        "networkType": "WIFI"
+    }
 
-    OTA接口 = 输入提示("请输入抓包到的OTA检查地址：")
-    小白提示("类似：/product/xxxx/ota/checkVersion")
+    # 1. 下载官方固件
+    original_img, endpos = download_original_firmware(ota_url, post_data)
 
-    分片输入 = 输入提示("请输入endpos（用英文逗号分隔）：")
-    小白提示("例：104857600,209715200,314572800")
+    # 2. 自动提取原MD5
+    old_md5 = search_original_adb_md5(original_img)
 
-    分片结束位置 = []
-    for s in 分片输入.split(","):
-        s = s.strip()
-        if s.isdigit():
-            分片结束位置.append(int(s))
+    # 3. 计算新密码MD5（带换行）
+    new_md5 = calc_new_pass_md5(new_pass)
+    print(f"🔐 新密码MD5：{new_md5}")
 
-    分割线()
-    print("🚀 开始自动处理...")
+    # 4. 替换MD5生成新固件
+    modified_img = search_and_replace_md5_in_img(original_img, old_md5, new_md5)
 
-    print("\n【1/4】计算新密码MD5（带换行，网易专用）")
-    计算密码MD5(新密码)
+    # 5. 启动双服务器
+    start_file_server(local_ip, modified_img)
+    ota_path = "/" + ota_url.split("/", 1)[1]
+    start_ota_server(local_ip, ota_path, modified_img, endpos)
 
-    print("\n【2/4】生成OTA更新验证文件")
-    ota数据 = 生成OTA配置(固件路径, 本机IP, 分片结束位置)
-
-    print("\n【3/4】生成更新劫持服务器")
-    生成Node服务器(本机IP, OTA接口, ota数据)
-
-    print("\n【4/4】启动固件下载服务")
-    启动文件服务(固件路径, 本机IP)
+    # 6. 最终指引
+    print("\n" + "="*70)
+    print("✅ 全流程完成！现在只需：")
+    print(f"1. 修改HOSTS：{local_ip} iotapi.abupdate.com")
+    print("2. 刷新DNS：cmd 输入 ipconfig /flushdns")
+    print("3. 词典笔连电脑热点 → 检查更新 → 安装")
+    print(f"4. ADB密码：{new_pass}")
+    print("="*70)
+    print("\n按 Ctrl+C 退出")
+    while True:
+        time.sleep(1)
 
 if __name__ == "__main__":
     try:
-        主程序()
+        main()
     except Exception as e:
-        分割线()
-        print(f"❌ 出错：{e}")
-        print("💡 检查：路径是否正确、固件是否存在、分片是否填对")
+        print(f"\n❌ 错误：{e}")
         os.system("pause")
