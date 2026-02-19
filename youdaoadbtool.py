@@ -10,11 +10,10 @@ import requests
 import time
 import re
 
-# ====================== 版本与版权信息 ======================
+# ====================== 版本信息（会由 GitHub Action 自动更新）======================
 VERSION = "2.0"
 AUTHOR = "喂鸡 (Wei Ji)"
 COPYRIGHT = "Copyright © 2026 喂鸡 (Wei Ji). All rights reserved."
-BUILD_DATE = "2026-02-19"
 
 # ==============================================
 # 有道词典笔 ADB 全自动破解工具 · 全能一体化版
@@ -29,7 +28,6 @@ def print_title():
     print("    🔥 全流程一体化 · 无需任何外部工具")
     print("-" * 70)
     print(f"    👤 作者：{AUTHOR}")
-    print(f"    📅 编译日期：{BUILD_DATE}")
     print(f"    © {COPYRIGHT}")
     print("-" * 70)
     print("    ⚠️  本工具仅限学习研究，请勿用于商业用途")
