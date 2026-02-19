@@ -10,19 +10,30 @@ import requests
 import time
 import re
 
+# ====================== 版本与版权信息 ======================
+VERSION = "2.0"
+AUTHOR = "喂鸡 (Wei Ji)"
+COPYRIGHT = "Copyright © 2026 喂鸡 (Wei Ji). All rights reserved."
+BUILD_DATE = "2026-02-19"
+
 # ==============================================
-# 有道词典笔 ADB 全自动一体工具
-# 功能：抓包 → 下载固件 → 修改密码 → 搭建服务器
-# 无外部依赖 · 单EXE · 小白一键完成
+# 有道词典笔 ADB 全自动破解工具 · 全能一体化版
+# 功能：抓包 → 下载固件 → 替换密码 → 自动服务
+# 无任何外部依赖 · 单EXE · 小白一键完成
 # ==============================================
 
 def print_title():
-    os.system("title 有道词典笔ADB全自动工具 · 全能版")
+    os.system("title 有道词典笔ADB全自动工具 V" + VERSION)
     print("=" * 70)
-    print("    有道词典笔 ADB 全自动破解工具（全流程一体化）")
-    print("    无需Wireshark · 无需RKDevTool · 无需WinHex · 无需Node")
-    print("=" * 70)
-    print("[注意] 仅用于学习研究，风险自负！")
+    print(f"    🎉 有道词典笔 ADB 全自动破解工具  V{VERSION}")
+    print("    🔥 全流程一体化 · 无需任何外部工具")
+    print("-" * 70)
+    print(f"    👤 作者：{AUTHOR}")
+    print(f"    📅 编译日期：{BUILD_DATE}")
+    print(f"    © {COPYRIGHT}")
+    print("-" * 70)
+    print("    ⚠️  本工具仅限学习研究，请勿用于商业用途")
+    print("    ⚠️  一切风险自行承担，版权所有，侵权必究")
     print("=" * 70)
 
 def get_local_ip():
