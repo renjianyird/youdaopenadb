@@ -12,7 +12,7 @@ import re
 from scapy.all import sniff, IP, TCP, Raw, conf
 
 # ====================== 版本信息 ======================
-VERSION = "5.1"
+VERSION = "5.2"
 AUTHOR = "喂鸡 (Wei Ji)"
 COPYRIGHT = "Copyright (C) 2026 喂鸡 (Wei Ji). All rights reserved."
 
@@ -90,19 +90,21 @@ def packet_callback(packet):
                 post_data = json.loads(json_part)
                 CAPTURED_DATA["post_data"] = post_data
 
-                # 伪造为低版本号，让服务器下发固件
-                if "currentVersion" in post_data:
-                    old_ver = CAPTURED_DATA["post_data"]["currentVersion"]
-                    CAPTURED_DATA["post_data"]["currentVersion"] = "4.88"
-                    print(f"[+] 版本号已从 {old_ver} 改为 4.88，强制获取全量固件")
-                if "deltaVersion" in post_data:
-                    del CAPTURED_DATA["post_data"]["deltaVersion"]
-                    print(f"[+] 已删除增量更新标识，强制获取全量包")
-
+                # 保存全量包接口需要的参数
                 CAPTURED_DATA["timestamp"] = post_data.get("timestamp", "")
                 CAPTURED_DATA["sign"] = post_data.get("sign", "")
                 CAPTURED_DATA["mid"] = post_data.get("mid", "")
                 CAPTURED_DATA["productId"] = post_data.get("productId", "")
+
+                # 伪造为低版本号
+                if "currentVersion" in post_data:
+                    old_ver = CAPTURED_DATA["post_data"]["currentVersion"]
+                    CAPTURED_DATA["post_data"]["currentVersion"] = "4.88"
+                    print(f"[+] 版本号已从 {old_ver} 改为 4.88")
+                if "deltaVersion" in post_data:
+                    del CAPTURED_DATA["post_data"]["deltaVersion"]
+                    print(f"[+] 已删除增量更新标识")
+
                 return True
         except Exception:
             return False
@@ -123,11 +125,12 @@ def auto_capture():
         log_error("E103", "抓包模块启动失败", f"请以管理员身份运行程序，并确保安装Npcap。异常: {str(e)}")
         return False
 
-# ====================== 固件下载（修复闪退） ======================
+# ====================== 固件下载（集成全量包逻辑） ======================
 def download_original_firmware():
     print("\n[*] 正在获取固件...")
     headers = {"Content-Type": "application/json;charset=UTF-8"}
     try:
+        # 1. 先尝试 checkVersion
         r = requests.post(
             f"http://{CAPTURED_DATA['ota_url']}",
             json=CAPTURED_DATA["post_data"],
@@ -135,30 +138,36 @@ def download_original_firmware():
             timeout=15
         )
         r.raise_for_status()
-        print(f"[DEBUG] 服务器返回原始内容: {r.text}")
+        print(f"[DEBUG] checkVersion 返回: {r.text}")
         j = r.json()
 
-        # 第一次 2101：自动重试，确保版本号伪造生效
+        # 2. 如果是 2101，调用全量包接口（B站教程核心步骤）
         if j.get("status") == 2101:
-            print("\n[!] 设备已是最新版本，正在尝试切换为低版本获取固件...")
-            CAPTURED_DATA["post_data"]["currentVersion"] = "4.88"
-            if "deltaVersion" in CAPTURED_DATA["post_data"]:
-                del CAPTURED_DATA["post_data"]["deltaVersion"]
+            print("\n[!] 设备已是最新版本，正在调用全量包接口...")
+            product_id = CAPTURED_DATA["productId"]
+            full_url = f"http://iotapi.abupdate.com/product/{product_id}/ota/full"
             
-            # 重新发送请求
-            r = requests.post(
-                f"http://{CAPTURED_DATA['ota_url']}",
-                json=CAPTURED_DATA["post_data"],
+            # 用抓包得到的参数构造请求
+            full_payload = {
+                "mid": CAPTURED_DATA["mid"],
+                "productId": product_id,
+                "timestamp": CAPTURED_DATA["timestamp"],
+                "sign": CAPTURED_DATA["sign"],
+                "currentVersion": "4.88"  # 伪造低版本
+            }
+            
+            r_full = requests.post(
+                full_url,
+                json=full_payload,
                 headers=headers,
                 timeout=15
             )
-            r.raise_for_status()
-            print(f"[DEBUG] 重试后服务器返回: {r.text}")
-            j = r.json()
+            r_full.raise_for_status()
+            print(f"[DEBUG] 全量包接口返回: {r_full.text}")
+            j = r_full.json()
 
-        # 第二次 2101：检查本地固件，避免闪退
-        if j.get("status") == 2101:
-            print("\n[!] 仍未获取到固件，正在检查本地文件...")
+        # 3. 解析全量包地址
+        if j.get("status") != 1000:
             if os.path.exists("original.img"):
                 print("[+] 检测到本地已有 original.img，将直接使用本地固件继续流程。")
                 return "original.img", [0]
@@ -166,28 +175,17 @@ def download_original_firmware():
                 log_error("E205", "词典笔已是最新版本，且未检测到本地固件文件", "请手动下载固件并重试")
                 return None, None
 
-        # 正常获取固件
-        if j is None or "data" not in j or j["data"] is None:
-            raise ValueError(f"服务器响应异常，无data字段: {j}")
-        if "version" not in j["data"] or j["data"]["version"] is None:
-            raise ValueError(f"服务器响应异常，无version字段: {j['data']}")
-        
         ver = j["data"]["version"]
         url = ver.get("deltaUrl") or ver.get("fullUrl")
-        if not url:
-            raise ValueError(f"未找到固件下载地址，version内容: {ver}")
-        if "segmentMd5" not in ver:
-            raise ValueError(f"缺少 segmentMd5 字段，version 内容: {ver}")
-        
         seg = json.loads(ver["segmentMd5"])
         endpos = [x["endpos"] for x in seg]
 
-        print("[+] 正在下载固件，请稍等...")
+        print("[+] 正在下载全量固件，请稍等...")
         with open("original.img", "wb") as f:
             with requests.get(url, stream=True, timeout=120) as resp:
                 for chunk in resp.iter_content(1024*1024):
                     f.write(chunk)
-        print("[+] 固件下载完成")
+        print("[+] 全量固件下载完成")
         return "original.img", endpos
 
     except requests.exceptions.Timeout:
@@ -199,7 +197,6 @@ def download_original_firmware():
     except Exception as e:
         log_error("E203", "下载失败", str(e))
 
-    # 失败后检查本地固件
     if os.path.exists("original.img"):
         print("[+] 检测到本地已有 original.img，将直接使用本地固件继续流程。")
         return "original.img", [0]
@@ -213,7 +210,7 @@ def file_md5_hex(path):
     try:
         h = hashlib.md5()
         with open(path, "rb") as f:
-            for b in iter(lambda: f.read(1024*1024), b""):
+            for b in iter(lambda f=f: f.read(1024*1024), b""):
                 h.update(b)
         return h.hexdigest()
     except Exception as e:
@@ -224,7 +221,7 @@ def sha256_hex(path):
     try:
         h = hashlib.sha256()
         with open(path, "rb") as f:
-            for b in iter(lambda: f.read(1024*1024), b""):
+            for b in iter(lambda f=f: f.read(1024*1024), b""):
                 h.update(b)
         return h.hexdigest()
     except Exception as e:
