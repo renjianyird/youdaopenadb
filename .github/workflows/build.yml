@@ -43,7 +43,7 @@ jobs:
           ren dist\YoudaoADB_Full1Auto.exe YoudaoADB_Full1Auto_v${{ steps.calc_ver.outputs.build_version }}.exe
 
       - name: 发布 Release
-        uses: softprops/softprops-gh-release@v2
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.calc_ver.outputs.build_version }}
           name: 有道词典笔ADB全自动工具 v${{ steps.calc_ver.outputs.build_version }}
