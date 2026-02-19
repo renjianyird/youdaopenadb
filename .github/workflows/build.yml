@@ -1,4 +1,4 @@
-name: 编译全自动ADB工具
+name: 编译有道词典笔ADB工具 V2.0
 
 on:
   workflow_dispatch:
@@ -18,6 +18,6 @@ jobs:
       - run: pyinstaller -F -c YoudaoADB_FullAuto.py
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: auto_build
-          name: 有道词典笔全自动工具
+          tag_name: v2.0
+          name: 有道词典笔ADB全自动工具 V2.0 - 作者：喂鸡 (Wei Ji)
           files: dist/YoudaoADB_FullAuto.exe
