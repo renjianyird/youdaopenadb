@@ -30,8 +30,9 @@ jobs:
       - name: 自动把版本号写入代码
         shell: pwsh
         run: |
+          $scriptName = "YoudaoADB_FullAuto.py"
           $versionLine = "VERSION = `"${{ steps.calc_ver.outputs.build_version }}`""
-          (Get-Content YoudaoADB_Full1Auto.py) -replace '^VERSION = ".*?"', $versionLine | Set-Content YoudaoADB_Full1Auto.py
+          (Get-Content $scriptName) -replace '^VERSION = ".*?"', $versionLine | Set-Content $scriptName
 
       - name: 安装依赖
         run: |
@@ -39,9 +40,12 @@ jobs:
           pip install requests scapy pyinstaller
 
       - name: 编译单文件 EXE
+        shell: pwsh
         run: |
-          pyinstaller -F -c YoudaoADB_Full1Auto.py
-          ren dist\YoudaoADB_Full1Auto.exe YoudaoADB_Full1Auto_v${{ steps.calc_ver.outputs.build_version }}.exe
+          $scriptName = "YoudaoADB_FullAuto.py"
+          $exeName = "YoudaoADB_FullAuto_v${{ steps.calc_ver.outputs.build_version }}.exe"
+          pyinstaller -F -c $scriptName
+          Rename-Item -Path "dist\$($scriptName -replace '.py','.exe')" -NewName $exeName
 
       - name: 发布 Release
         uses: softprops/action-gh-release@v2
@@ -52,6 +56,5 @@ jobs:
             ✅ 自动构建版本：v${{ steps.calc_ver.outputs.build_version }}
             ✅ 作者：喂鸡 (Wei Ji)
             ✅ 自动抓包 | 自动下载 | 自动修改
-            ✅ 已修复：解析固件地址失败导致闪退问题
             © 2026 喂鸡 (Wei Ji) 版权所有
-          files: dist/YoudaoADB_Full1Auto_v${{ steps.calc_ver.outputs.build_version }}.exe
+          files: dist/YoudaoADB_FullAuto_v${{ steps.calc_ver.outputs.build_version }}.exe
