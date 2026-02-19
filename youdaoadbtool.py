@@ -9,7 +9,6 @@ import socketserver
 def 标题(title):
     os.system("title " + title)
 
-
 def 分割线():
     print("=" * 60)
 
@@ -27,7 +26,7 @@ def 获取本机IP():
         return "127.0.0.1"
 
 def 输入提示(文字):
-    print(f"\n👉 {text}", end="")
+    print(f"\n👉 {文字}", end="")
     return input().strip()
 
 def 计算密码MD5(密码):
