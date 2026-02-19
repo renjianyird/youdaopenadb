@@ -1,11 +1,8 @@
-name: 编译并发布 Release
+name: 编译全自动ADB工具
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
-# 关键：给 GITHUB_TOKEN 增加写权限
 permissions:
   contents: write
 
@@ -13,34 +10,14 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: 下载代码
-        uses: actions/checkout@v4
-
-      - name: 设置 Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          architecture: 'x64'
-
-      - name: 安装依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-
-      - name: 编译 EXE
-        run: |
-          pyinstaller -F -c YoudaoADBTool.py
-
-      - name: 获取版本时间
-        id: version
-        run: echo "version=$(date +'%Y%m%d%H%M')" >> $env:GITHUB_OUTPUT
-        shell: pwsh
-
-      - name: 创建 Release
-        uses: softprops/action-gh-release@v2
+      - run: pip install requests pyinstaller
+      - run: pyinstaller -F -c YoudaoADB_FullAuto.py
+      - uses: softprops/action-gh-release@v2
         with:
-          name: 有道词典笔ADB工具_${{ steps.version.outputs.version }}
-          tag_name: ${{ steps.version.outputs.version }}
-          files: dist/YoudaoADBTool.exe
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: auto_build
+          name: 有道词典笔全自动工具
+          files: dist/YoudaoADB_FullAuto.exe
