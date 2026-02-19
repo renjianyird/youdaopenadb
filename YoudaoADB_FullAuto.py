@@ -12,7 +12,7 @@ import re
 from scapy.all import sniff, IP, TCP, Raw, conf
 
 # ====================== 版本信息（会自动更新）======================
-VERSION = "3.7"
+VERSION = "4.2"
 AUTHOR = "喂鸡 (Wei Ji)"
 COPYRIGHT = "Copyright (C) 2026 喂鸡 (Wei Ji). All rights reserved."
 
@@ -131,21 +131,22 @@ def auto_capture():
         log_error("E103", "抓包模块启动失败", f"请以管理员身份运行程序，并确保安装Npcap: {str(e)}")
         return False
 
-# ====================== 2. 下载与解包模块（增加调试输出）======================
-def download_original_firmware(max_retries=3):
+# ====================== 2. 下载与解包模块（修复卡死）======================
+def download_original_firmware(max_retries=2):
     retries = 0
     while retries < max_retries:
         print(f"\n[*] 正在获取官方全量固件... (尝试 {retries + 1}/{max_retries})")
         headers = {"Content-Type": "application/json;charset=UTF-8"}
         try:
+            # 增加 10 秒超时，避免无限挂起
             r = requests.post(
                 f"http://{CAPTURED_DATA['ota_url']}",
                 json=CAPTURED_DATA["post_data"],
                 headers=headers,
-                timeout=30
+                timeout=10
             )
             r.raise_for_status()
-            print(f"[DEBUG] 服务器返回原始内容: {r.text}")  # 打印原始响应
+            print(f"[DEBUG] 服务器返回原始内容: {r.text}")
             j = r.json()
 
             if j is None:
@@ -165,13 +166,16 @@ def download_original_firmware(max_retries=3):
 
             print(f"[+] 固件地址：{url}")
             with open("original.img", "wb") as f:
-                with requests.get(url, stream=True, timeout=60) as resp:
+                with requests.get(url, stream=True, timeout=30) as resp:
                     resp.raise_for_status()
                     for chunk in resp.iter_content(1024*1024):
                         f.write(chunk)
             print("[+] 官方固件下载完成")
             return "original.img", endpos
 
+        except requests.exceptions.Timeout:
+            retries += 1
+            log_error("E201", f"请求超时 ({retries}/{max_retries})", "服务器响应超时，请检查网络或词典笔是否支持当前操作")
         except requests.exceptions.RequestException as e:
             retries += 1
             log_error("E201", f"网络请求失败 ({retries}/{max_retries})", str(e))
@@ -183,10 +187,14 @@ def download_original_firmware(max_retries=3):
             log_error("E203", f"下载失败 ({retries}/{max_retries})", str(e))
 
         if retries < max_retries:
-            print(f"[!] 5秒后重试...")
-            time.sleep(5)
+            print(f"[!] 3秒后重试...")
+            time.sleep(3)
 
     log_error("E204", "多次获取固件地址失败，无法继续")
+    print("\n[!] 可能原因：")
+    print("1. 词典笔已是最新版本，服务器未返回固件下载地址")
+    print("2. 网络环境异常，无法连接到有道 OTA 服务器")
+    print("3. 当前词典笔型号不支持此操作")
     return None, None
 
 # ====================== 3. 修改与校验模块 ======================
@@ -195,7 +203,7 @@ def md5_hex(data):
 
 def sha256_hex(path):
     try:
-        h = hashl.sha256()
+        h = hashlib.sha256()
         with open(path, "rb") as f:
             for b in iter(lambda: f.read(1024*1024), b""):
                 h.update(b)
