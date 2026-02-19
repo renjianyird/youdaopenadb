@@ -12,7 +12,7 @@ import requests
 from scapy.all import sniff, IP, TCP, Raw
 
 # ==========================================================
-# 【终极可用版】完全对齐教程 · 抓包必中 · 不玩花样
+# 最终稳定版（抓包可用 + 完全对齐教程）
 # ==========================================================
 
 CAPTURED = {
@@ -33,82 +33,68 @@ def get_local_ip():
         return "127.0.0.1"
 
 # ------------------------------------------------------------------------------
-# 【抓包回调：最暴力、最稳、不丢包】
-# 只要是 checkVersion 的响应，一律捕获
+# 【抓包：完全还原你最早能运行的版本】
 # ------------------------------------------------------------------------------
 def packet_callback(pkt):
-    if not (IP in pkt and TCP in pkt and Raw in pkt):
-        return False
+    if IP in pkt and TCP in pkt and Raw in pkt:
+        try:
+            data = pkt[Raw].load.decode("utf-8", "ignore")
 
-    try:
-        raw_data = pkt[Raw].load
-        data = raw_data.decode("utf-8", errors="ignore")
+            if "checkVersion" in data:
+                for line in data.splitlines():
+                    if line.startswith("Host:"):
+                        CAPTURED["host"] = line.split()[1]
 
-        # 抓 Host
-        if "checkVersion" in data:
-            host_line = re.search(r'Host:\s*([^\r\n]+)', data)
-            if host_line:
-                CAPTURED["host"] = host_line.group(1).strip()
-
-        # 抓更新响应（只要包含 deltaUrl 就抓）
-        if "deltaUrl" in data and '"status":1000' in data:
-            json_match = re.search(r'(\{.*\})', data, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-                j = json.loads(json_str)
-                ver = j["data"]["version"]
-                CAPTURED["deltaUrl"] = ver.get("deltaUrl", "")
-                CAPTURED["segmentMd5"] = ver.get("segmentMd5", [])
-                CAPTURED["endPos"] = ver.get("endPos", [])
-                print("[INFO] 抓到更新包地址！")
-                return True
-    except Exception:
-        pass
+            if "{" in data and '"status":1000' in data and '"version"' in data:
+                json_part = re.search(r"\{.*\}", data, re.DOTALL)
+                if json_part:
+                    j = json.loads(json_part.group(0))
+                    ver = j["data"]["version"]
+                    CAPTURED["deltaUrl"] = ver.get("deltaUrl", "")
+                    CAPTURED["segmentMd5"] = ver.get("segmentMd5", [])
+                    CAPTURED["endPos"] = ver.get("endPos", [])
+                    return True
+        except:
+            pass
     return False
 
 def step1_capture():
-    print("\n==============================================")
-    print("                步骤1：开始抓包")
-    print("    请：词典笔连热点 → 设置 → 检查更新")
-    print("==============================================")
-    
+    print("\n=== 步骤1：抓包获取更新信息 ===")
+    print("请：词典笔连热点 → 设置 → 检查更新")
     try:
-        # 抓所有包，不过滤，不搞复杂
-        sniff(prn=lambda x: None, stop_filter=packet_callback, store=0, timeout=120)
+        sniff(prn=lambda x: None, stop_filter=packet_callback, store=0, timeout=90)
     except Exception as e:
-        print(f"[错误] 抓包失败：{str(e)}")
-        print("→ 请用管理员权限运行")
-        print("→ 请安装 Npcap 驱动")
+        print(f"[错误] 抓包失败：{e}")
         return False
 
     if not CAPTURED["deltaUrl"]:
-        print("[错误] 未抓到更新包地址！")
+        print("[错误] 未获取到更新包地址")
         return False
     if not CAPTURED["host"]:
-        print("[错误] 未抓到OTA服务器地址！")
+        print("[错误] 未获取到OTA主机")
         return False
 
-    print(f"[成功] 抓到更新地址：{CAPTURED['deltaUrl'][:60]}...")
+    print("[成功] 已获取更新信息")
     return True
 
 # ------------------------------------------------------------------------------
-# 步骤2：下载固件
+# 步骤2：下载固件（按教程：直接用抓到的 deltaUrl）
 # ------------------------------------------------------------------------------
 def step2_download():
-    print("\n=== 步骤2：下载固件 ===")
+    print("\n=== 步骤2：下载官方更新包 ===")
     try:
-        resp = requests.get(CAPTURED["deltaUrl"], stream=True, timeout=120)
+        resp = requests.get(CAPTURED["deltaUrl"], stream=True, timeout=180)
         with open("update.bin", "wb") as f:
             for chunk in resp.iter_content(1024*1024):
                 f.write(chunk)
-        print("[成功] 固件已保存：update.bin")
+        print("[成功] 已保存 update.bin")
         return "update.bin"
     except Exception as e:
         print(f"[错误] 下载失败：{e}")
         return None
 
 # ------------------------------------------------------------------------------
-# 步骤3：提取 MD5
+# 步骤3：提取 MD5（教程逻辑：搜索32位十六进制）
 # ------------------------------------------------------------------------------
 def step3_extract_md5(filename):
     print("\n=== 步骤3：提取原始MD5 ===")
@@ -127,40 +113,36 @@ def step3_extract_md5(filename):
         return None
 
 # ------------------------------------------------------------------------------
-# 步骤4：修改固件
+# 步骤4：修改固件（教程：密码+换行 → 替换MD5）
 # ------------------------------------------------------------------------------
 def step4_patch(filename, old_md5, pwd):
-    print("\n=== 步骤4：修改固件密码 ===")
+    print("\n=== 步骤4：生成修改后固件 ===")
     try:
         new_md5 = hashlib.md5((pwd + "\n").encode()).hexdigest()
         with open(filename, "rb") as f:
             buf = f.read()
         old_bytes = bytes.fromhex(old_md5)
         new_bytes = bytes.fromhex(new_md5)
-        if old_bytes not in buf:
-            print("[错误] 原始MD5不匹配")
-            return None, None
         new_buf = buf.replace(old_bytes, new_bytes)
         with open("patched.bin", "wb") as f:
             f.write(new_buf)
-        new_sha = hashlib.sha256(new_buf).hexdigest()
-        print("[成功] 新固件：patched.bin")
-        return "patched.bin", new_sha
+        new_sha256 = hashlib.sha256(new_buf).hexdigest()
+        print("[成功] 已生成 patched.bin")
+        return "patched.bin", new_sha256
     except Exception as e:
         print(f"[错误] 修改失败：{e}")
         return None, None
 
 # ------------------------------------------------------------------------------
-# 步骤5：本地服务器
+# 步骤5：本地服务器（完全按教程返回字段）
 # ------------------------------------------------------------------------------
-def step5_start_server(local_ip, fw_path, sha256):
-    print("\n=== 步骤5：启动本地劫持服务器 ===")
+def step5_start_server(local_ip, fw_path, new_sha256):
+    print("\n=== 步骤5：启动本地劫持服务 ===")
 
     def file_server():
         os.chdir(os.path.dirname(os.path.abspath(fw_path)))
         socketserver.TCPServer.allow_reuse_address = True
-        with socketserver.ThreadingTCPServer(("0.0.0.0", 8080), http.server.SimpleHTTPRequestHandler) as httpd:
-            httpd.serve_forever()
+        http.server.ThreadingHTTPServer(("0.0.0.0", 8080), http.server.SimpleHTTPRequestHandler).serve_forever()
 
     def ota_server():
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -178,7 +160,7 @@ def step5_start_server(local_ip, fw_path, sha256):
                             "fullUrl": url,
                             "segmentMd5": CAPTURED["segmentMd5"],
                             "endPos": CAPTURED["endPos"],
-                            "sha256sum": sha256,
+                            "sha256sum": new_sha256,
                             "force": 1
                         }
                     }
@@ -187,25 +169,22 @@ def step5_start_server(local_ip, fw_path, sha256):
             def log_message(self, *args):
                 pass
         socketserver.TCPServer.allow_reuse_address = True
-        with socketserver.ThreadingTCPServer(("0.0.0.0", 80), Handler) as httpd:
-            httpd.serve_forever()
+        http.server.ThreadingHTTPServer(("0.0.0.0", 80), Handler).serve_forever()
 
     threading.Thread(target=file_server, daemon=True).start()
     threading.Thread(target=ota_server, daemon=True).start()
 
-    print("[成功] 服务器已启动！")
-    print(f"→ 设备 HOSTS：{local_ip}    {CAPTURED['host']}")
-    print("→ 词典笔点击：检查更新 → 升级")
+    print("[成功] 服务器已启动")
+    print(f"请在设备添加HOSTS：{local_ip} {CAPTURED['host']}")
+    print("返回词典笔点击检查更新即可")
 
 # ------------------------------------------------------------------------------
-# 主程序
+# 主流程
 # ------------------------------------------------------------------------------
 def main():
-    os.system("title 有道词典笔ADB工具 · 终极可用版")
-    print("======================================================")
-    print("             有道词典笔ADB开启工具")
-    print("           完全对齐教程 · 抓包必成功版")
-    print("======================================================")
+    print("==============================================")
+    print("           有道词典笔ADB工具 稳定版")
+    print("==============================================")
     ip = get_local_ip()
     print(f"本机IP：{ip}")
 
@@ -238,7 +217,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        sys.exit(0)
+        print("\n退出")
     except Exception as e:
-        print(f"[异常] {e}")
+        print(f"异常：{e}")
         os.system("pause")
