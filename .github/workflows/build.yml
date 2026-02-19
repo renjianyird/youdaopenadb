@@ -1,0 +1,21 @@
+name: 编译小白版ADB工具
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+      - run: pip install pyinstaller
+      - run: pyinstaller -F -c YoudaoADBTool.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YoudaoADB_小白版
+          path: dist/YoudaoADBTool.exe
